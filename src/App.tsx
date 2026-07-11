@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { socket } from "./services/socket";
+import { useSocketStatus } from "./services/useSocketStatus";
 import LobbyView from "./components/LobbyView";
 import WaitingRoom from "./components/WaitingRoom";
 import GameBoard from "./components/GameBoard";
 import ChatSidebar from "./components/ChatSidebar";
+import ConnectionBar from "./components/ConnectionBar";
 import { Toaster, toast } from "sonner";
 
 export type ViewState = "LOBBY" | "WAITING_ROOM" | "ACTIVE_GAME";
@@ -43,28 +45,16 @@ export interface GameState {
 }
 
 // ─── Session Persistence ───────────────────────────────────────────────────
-// Store key state in sessionStorage so page refreshes / reconnects can resume
 const SESSION_KEY = "bluff_session";
 
-function saveSession(data: {
-  playerName: string;
-  roomCode: string;
-  currentView: ViewState;
-}) {
-  sessionStorage.setItem(SESSION_KEY, JSON.stringify(data));
+function saveSession(data: { playerName: string; roomCode: string; currentView: ViewState }) {
+  try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(data)); } catch { /* noop */ }
 }
-
 function loadSession(): { playerName: string; roomCode: string; currentView: ViewState } | null {
-  try {
-    const raw = sessionStorage.getItem(SESSION_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
+  try { const r = sessionStorage.getItem(SESSION_KEY); return r ? JSON.parse(r) : null; } catch { return null; }
 }
-
 function clearSession() {
-  sessionStorage.removeItem(SESSION_KEY);
+  try { sessionStorage.removeItem(SESSION_KEY); } catch { /* noop */ }
 }
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -72,8 +62,6 @@ function App() {
   const session = loadSession();
 
   const [currentView, setCurrentView] = useState<ViewState>(session?.currentView ?? "LOBBY");
-  const [isConnected, setIsConnected] = useState(false);
-  const [isReconnecting, setIsReconnecting] = useState(false);
   const [myId, setMyId] = useState<string>("");
 
   const [playerName, setPlayerName] = useState(session?.playerName ?? "");
@@ -82,6 +70,9 @@ function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [yourHand, setYourHand] = useState<CardData[]>([]);
+
+  // Track whether we showed "Connection lost" toast to avoid duplicate toasts
+  const lostToastShown = useRef(false);
 
   // Refs so socket listeners always see latest values without stale closures
   const playerNameRef = useRef(playerName);
@@ -101,32 +92,27 @@ function App() {
   useEffect(() => {
     socket.connect();
 
-    // ── connect / disconnect ────────────────────────────────────────────
+    // ── connect ──────────────────────────────────────────────────────────
     socket.on("connect", () => {
-      setIsConnected(true);
-      setIsReconnecting(false);
       setMyId(socket.id || "");
+      lostToastShown.current = false;
 
       const view = currentViewRef.current;
-      const rc = roomCodeRef.current;
+      const rc   = roomCodeRef.current;
       const name = playerNameRef.current;
 
-      // Auto-rejoin if we were already in a room/game
       if ((view === "WAITING_ROOM" || view === "ACTIVE_GAME") && rc && name) {
-        toast.info("Reconnected — rejoining room...");
+        // Silent rejoin — toast is shown by ConnectionBar
         socket.emit("join_room", { playerName: name, roomCode: rc });
-      } else {
-        toast.success("Connected to server");
       }
     });
 
+    // ── disconnect ───────────────────────────────────────────────────────
     socket.on("disconnect", (reason) => {
-      setIsConnected(false);
-      console.log("[disconnect] reason:", reason);
-      // Only show reconnecting overlay if we were in a game
-      if (currentViewRef.current !== "LOBBY") {
-        setIsReconnecting(true);
-        toast.error("Connection lost — reconnecting...");
+      console.warn("[disconnect]", reason);
+      if (currentViewRef.current !== "LOBBY" && !lostToastShown.current) {
+        lostToastShown.current = true;
+        toast.error("Connection lost — trying to reconnect…", { id: "disconnect-toast" });
       }
     });
 
@@ -134,9 +120,14 @@ function App() {
       console.error("[connect_error]", err.message);
     });
 
-    // ── Room events ─────────────────────────────────────────────────────
+    // Fired when socket.io successfully re-establishes the connection
+    socket.io.on("reconnect", (attempt) => {
+      console.log("[reconnected] after", attempt, "attempts");
+      toast.success("Reconnected!", { id: "disconnect-toast" });
+    });
+
+    // ── Room events ──────────────────────────────────────────────────────
     socket.on("room_created", (...args: any[]) => {
-      console.log("[room_created]", JSON.stringify(args));
       const data = args[0];
       setRoomCode(data.roomCode || "");
       setPlayers(data.players || []);
@@ -145,34 +136,27 @@ function App() {
     });
 
     socket.on("room_updated", (...args: any[]) => {
-      console.log("[room_updated]", JSON.stringify(args));
       const data = args[0];
       setPlayers(data.players || []);
       if (data.messages?.length) setMessages(data.messages);
       setCurrentView(prev => prev === "LOBBY" ? "WAITING_ROOM" : prev);
-      // If we were reconnecting and got room data, we're back
-      setIsReconnecting(false);
     });
 
-    // ── Game events ─────────────────────────────────────────────────────
+    // ── Game events ──────────────────────────────────────────────────────
     socket.on("game_started", (...args: any[]) => {
-      console.log("[game_started]", JSON.stringify(args));
       const data = args[0];
       setGameState(data.gameState || null);
       setPlayers(data.players || []);
       setYourHand(data.yourHand || []);
       setCurrentView("ACTIVE_GAME");
-      setIsReconnecting(false);
       toast.success("🃏 Game started!");
     });
 
     socket.on("game_state_changed", (...args: any[]) => {
-      console.log("[game_state_changed]", JSON.stringify(args));
       const data = args[0];
       if (data.gameState) setGameState(data.gameState);
       if (data.players?.length) setPlayers(data.players);
       if (data.yourHand?.length) setYourHand(data.yourHand);
-      setIsReconnecting(false);
     });
 
     socket.on("new_message", (...args: any[]) => {
@@ -186,9 +170,8 @@ function App() {
       toast.error(msg);
     });
 
-    // ── Game over ───────────────────────────────────────────────────────
+    // ── Game over ────────────────────────────────────────────────────────
     socket.on("game_over", (...args: any[]) => {
-      console.log("[game_over]", JSON.stringify(args));
       const data = args[0];
       const winner = data?.winner || data?.winnerName || "Someone";
       toast.success(`🏆 Game Over! ${winner} wins!`, { duration: 6000 });
@@ -213,28 +196,35 @@ function App() {
       socket.off("new_message");
       socket.off("error_message");
       socket.off("game_over");
+      socket.io.off("reconnect");
     };
   }, []);
+
+  // ── Use socket status hook for UI state ───────────────────────────────
+  const { isConnected, isReconnecting } = useSocketStatus();
 
   return (
     <div className="min-h-screen bg-background text-foreground dark flex flex-col font-sans">
       <Toaster theme="dark" position="top-center" richColors closeButton />
 
-      {/* ── Reconnecting overlay ─────────────────────────────────────── */}
-      {isReconnecting && (
-        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm">
-          <div className="flex flex-col items-center gap-4 text-center p-8">
-            <div className="w-12 h-12 rounded-full border-4 border-primary border-t-transparent animate-spin" />
-            <h2 className="text-xl font-bold text-white">Connection Lost</h2>
-            <p className="text-white/60 text-sm">
-              Reconnecting to server and rejoining room <span className="font-mono text-primary">{roomCode}</span>...
+      {/* Live connection quality badge — always visible */}
+      <ConnectionBar />
+
+      {/* ── Reconnecting overlay — shown only mid-game ─────────────────── */}
+      {isReconnecting && currentView !== "LOBBY" && (
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm pointer-events-none">
+          <div className="flex flex-col items-center gap-4 text-center p-8 pointer-events-auto">
+            <div className="w-14 h-14 rounded-full border-4 border-primary border-t-transparent animate-spin" />
+            <h2 className="text-2xl font-bold text-white">Connection Lost</h2>
+            <p className="text-white/60 text-sm max-w-xs">
+              Reconnecting to <span className="font-mono text-primary">{roomCode}</span>…
+              <br />Your game is still running on the server.
             </p>
-            <p className="text-white/30 text-xs">Your game is still running — please wait</p>
           </div>
         </div>
       )}
 
-      {/* ── Views ────────────────────────────────────────────────────── */}
+      {/* ── Views ────────────────────────────────────────────────────────── */}
       {currentView === "LOBBY" && (
         <LobbyView
           isConnected={isConnected}
