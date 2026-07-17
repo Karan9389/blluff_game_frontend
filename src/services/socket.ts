@@ -3,57 +3,79 @@ import { io, Socket } from "socket.io-client";
 const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || "http://localhost:3001")
   .replace(/\/$/, ""); // strip trailing slash
 
+// ── CRITICAL: Start with polling, then upgrade to WebSocket ──────────────
+//
+// Render.com and many proxies block the initial WebSocket handshake
+// but DO allow upgrading an existing HTTP polling connection to WebSocket.
+// Starting with "polling" first and letting Socket.io auto-upgrade is the
+// most reliable strategy across all hosting platforms.
+//
+// What happens:
+//   1. Client opens HTTP long-poll connection  ← always works
+//   2. Server sends "upgrade" packet
+//   3. Client opens WebSocket alongside the polling
+//   4. On success, polling is closed; pure WebSocket takes over
+//   5. On failure (proxy blocks WS), polling continues silently
+//
 export const socket: Socket = io(BACKEND_URL, {
   autoConnect: false,
 
-  // ── Transport: try WebSocket first, fall back to polling ──────────────────
-  // This is critical for Railway — it fully supports WebSocket, so we prefer
-  // it. The fallback ensures we never get stuck if WS is blocked by a proxy.
-  transports: ["websocket", "polling"],
+  // polling first → auto-upgrade to websocket
+  transports: ["polling", "websocket"],
+  upgrade: true,           // allow upgrade from polling → websocket
+  rememberUpgrade: true,   // remember if WS worked last time (faster reconnects)
 
-  // ── Reconnection ──────────────────────────────────────────────────────────
+  // ── Reconnection ──────────────────────────────────────────────────────
   reconnection: true,
-  reconnectionAttempts: Infinity, // keep trying forever
-  reconnectionDelay: 1000,        // start retrying after 1s
-  reconnectionDelayMax: 8000,     // cap at 8s between retries
-  randomizationFactor: 0.3,       // jitter to avoid thundering herd
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 10000,
+  randomizationFactor: 0.4,
 
-  // ── Timeouts ──────────────────────────────────────────────────────────────
-  timeout: 20000,                 // connection attempt timeout (ms)
-  ackTimeout: 10000,              // acknowledgement timeout
+  // ── Timeouts ──────────────────────────────────────────────────────────
+  timeout: 20000,
 
-  // ── Auth / headers — add if your Railway backend needs CORS auth ──────────
-  // withCredentials: true,
+  // ── Keep connection alive through proxy idle timeouts ─────────────────
+  // Most platforms drop idle connections after 55–75s. pingInterval +
+  // pingTimeout are the server-side settings; the client respects them.
+  // We also emit our own heartbeat (below) as belt-and-suspenders.
 });
 
-// ── Heartbeat keep-alive ──────────────────────────────────────────────────
-// Railway (and similar platforms) will idle-close sockets after ~60s of
-// silence. Sending a lightweight ping every 25s keeps the connection alive.
-let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+// ── Heartbeat keep-alive ─────────────────────────────────────────────────
+// Sends a lightweight packet every 20s so proxies never see the connection
+// as "idle" and close it. 20s is safely below Render's ~55s idle timeout.
+let _heartbeat: ReturnType<typeof setInterval> | null = null;
 
 socket.on("connect", () => {
-  if (heartbeatTimer) clearInterval(heartbeatTimer);
-  heartbeatTimer = setInterval(() => {
+  // Log the actual transport in use after connection is established
+  const engine = (socket as any).io?.engine;
+  if (import.meta.env.DEV && engine) {
+    console.log(`[socket] connected via ${engine.transport.name}`);
+    engine.on("upgrade", () => {
+      console.log(`[socket] upgraded to ${engine.transport.name}`);
+    });
+  }
+
+  if (_heartbeat) clearInterval(_heartbeat);
+  _heartbeat = setInterval(() => {
     if (socket.connected) {
-      socket.emit("ping"); // most backends silently ignore unknown events
+      // Use a no-op emit — the packet itself keeps TCP alive
+      socket.volatile.emit("heartbeat");
     }
-  }, 25_000);
+  }, 20_000);
 });
 
 socket.on("disconnect", () => {
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-  }
+  if (_heartbeat) { clearInterval(_heartbeat); _heartbeat = null; }
 });
 
-// ── Debug helpers (stripped in production builds) ─────────────────────────
+// ── Dev-mode full event logging ──────────────────────────────────────────
 if (import.meta.env.DEV) {
   socket.onAny((event, ...args) => {
-    console.log(`[socket ↓] ${event}`, args);
+    console.log(`[socket ↓] ${event}`, args.length ? args : "");
   });
   socket.onAnyOutgoing((event, ...args) => {
-    console.log(`[socket ↑] ${event}`, args);
+    console.log(`[socket ↑] ${event}`, args.length ? args : "");
   });
 }
 
