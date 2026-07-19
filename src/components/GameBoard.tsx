@@ -61,6 +61,7 @@ export default function GameBoard({ gameState, players, yourHand, roomCode, myId
   const totalSelected = selectedCardIndices.size;
 
   const toggleCard = (idx: number) => {
+    if (!isMyTurn) return; // Don't allow selection when not your turn
     const next = new Set(selectedCardIndices);
     if (next.has(idx)) next.delete(idx);
     else next.add(idx);
@@ -71,19 +72,26 @@ export default function GameBoard({ gameState, players, yourHand, roomCode, myId
     if (!isMyTurn) return toast.error("It's not your turn!");
     if (totalSelected === 0) return toast.error("Select at least one card!");
 
-    const cards = Array.from(selectedCardIndices).map(i => yourHand[i]);
-    socket.emit("play_cards", { roomCode, cards, claimedRank });
-    console.log("[play_cards]", { roomCode, cards, claimedRank });
+    const cardsPlayed = Array.from(selectedCardIndices).map(i => yourHand[i]);
+    // ✅ Backend expects: { roomCode, cardsPlayed, claimedRank }
+    socket.emit("play_cards", { roomCode, cardsPlayed, claimedRank });
+    console.log("[play_cards] →", { roomCode, cardsPlayed, claimedRank });
     setSelectedCardIndices(new Set());
-    toast.info(`Playing ${totalSelected} card(s) as ${claimedRank}`);
+    toast.info(`Played ${totalSelected} card(s) as ${claimedRank}`);
   };
 
   const handleCallBluff = () => {
-    if (!isMyTurn) return toast.error("It's not your turn!");
-    if (pileCount === 0) return toast.error("The pile is empty!");
+    if (pileCount === 0) return toast.error("No cards in the pile to challenge!");
+    // Any player can call bluff EXCEPT the one who just played
+    if (gameState.lastPlayedPlayerId === myEffectiveId) {
+      return toast.error("You can't call bluff on yourself!");
+    }
+    // ✅ Backend expects: { roomCode }
     socket.emit("call_bluff", { roomCode });
-    console.log("[call_bluff]", { roomCode });
+    console.log("[call_bluff] →", { roomCode });
+    toast.info("Bluff called! Revealing cards…");
   };
+
 
   return (
     <div
@@ -252,11 +260,11 @@ export default function GameBoard({ gameState, players, yourHand, roomCode, myId
               <Button
                 variant="destructive"
                 onClick={handleCallBluff}
-                disabled={!isMyTurn || pileCount === 0 || gameState.lastPlayedPlayerId === myEffectiveId}
+                disabled={pileCount === 0 || gameState.lastPlayedPlayerId === myEffectiveId || gameState.lastPlayedPlayerId === null}
                 className="h-9 px-4 font-bold active:scale-95 flex items-center gap-1.5 shadow-lg"
               >
                 <ShieldAlert className="h-4 w-4" />
-                Bluff!
+                Call Bluff!
               </Button>
             </div>
           </div>

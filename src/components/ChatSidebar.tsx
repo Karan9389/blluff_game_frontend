@@ -17,8 +17,9 @@ export default function ChatSidebar({ messages, players, myId, roomCode }: ChatS
   const [inputText, setInputText] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Build a quick id→name lookup from the players array
+  // Build id→name and name→id lookups
   const nameMap: Record<string, string> = {};
+  const myName = players.find(p => p.id === myId)?.name ?? "";
   players.forEach(p => { nameMap[p.id] = p.name; });
 
   useEffect(() => {
@@ -28,18 +29,18 @@ export default function ChatSidebar({ messages, players, myId, roomCode }: ChatS
   const handleSend = (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!inputText.trim()) return;
-    socket.emit("send_message", { roomCode, message: inputText, text: inputText });
+    // ✅ Backend expects: { roomCode, text, senderName }
+    socket.emit("send_message", { roomCode, text: inputText, senderName: myName });
     setInputText("");
   };
 
   const resolveName = (msg: ChatMessage): string => {
-    // Try every field the backend might use for the sender's identity
-    const senderId = msg.senderId || msg.sender;
-    if (senderId && nameMap[senderId]) return nameMap[senderId];
-    if (msg.senderName && msg.senderName !== "Unknown") return msg.senderName;
-    if (msg.playerName) return msg.playerName;
-    if (senderId === myId) return "You";
-    return senderId ? `Player (${senderId.slice(0, 4)})` : "System";
+    // Backend stores sender as the player NAME string (not socket ID)
+    // msg.sender = senderName, msg.type = 'user' | 'system'
+    if (msg.type === "system") return "System";
+    const senderName = msg.sender || msg.senderName || msg.playerName || "";
+    if (!senderName) return "Unknown";
+    return senderName;
   };
 
   const resolveText = (msg: ChatMessage): string => {
@@ -47,8 +48,9 @@ export default function ChatSidebar({ messages, players, myId, roomCode }: ChatS
   };
 
   const isMyMessage = (msg: ChatMessage): boolean => {
-    const sid = msg.senderId || msg.sender;
-    return sid === myId;
+    // Backend stores sender as name, compare by name
+    const senderName = msg.sender || msg.senderName || "";
+    return !!myName && senderName === myName;
   };
 
   return (
