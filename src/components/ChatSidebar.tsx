@@ -4,18 +4,29 @@ import type { ChatMessage, Player } from "@/App";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { SendHorizontal, MessageCircle } from "lucide-react";
+import { SendHorizontal, MessageCircle, X } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface ChatSidebarProps {
   messages: ChatMessage[];
   players: Player[];
   myId: string;
   roomCode: string;
+  isOpenOnMobile?: boolean;
+  onCloseMobile?: () => void;
 }
 
-export default function ChatSidebar({ messages, players, myId, roomCode }: ChatSidebarProps) {
+export default function ChatSidebar({
+  messages,
+  players,
+  myId,
+  roomCode,
+  isOpenOnMobile = false,
+  onCloseMobile,
+}: ChatSidebarProps) {
   const [inputText, setInputText] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Build id→name and name→id lookups
   const nameMap: Record<string, string> = {};
@@ -30,13 +41,12 @@ export default function ChatSidebar({ messages, players, myId, roomCode }: ChatS
     e?.preventDefault();
     if (!inputText.trim()) return;
     // ✅ Backend expects: { roomCode, text, senderName }
-    socket.emit("send_message", { roomCode, text: inputText, senderName: myName });
+    socket.emit("send_message", { roomCode, text: inputText.trim(), senderName: myName });
     setInputText("");
+    inputRef.current?.focus();
   };
 
   const resolveName = (msg: ChatMessage): string => {
-    // Backend stores sender as the player NAME string (not socket ID)
-    // msg.sender = senderName, msg.type = 'user' | 'system'
     if (msg.type === "system") return "System";
     const senderName = msg.sender || msg.senderName || msg.playerName || "";
     if (!senderName) return "Unknown";
@@ -48,19 +58,46 @@ export default function ChatSidebar({ messages, players, myId, roomCode }: ChatS
   };
 
   const isMyMessage = (msg: ChatMessage): boolean => {
-    // Backend stores sender as name, compare by name
     const senderName = msg.sender || msg.senderName || "";
     return !!myName && senderName === myName;
   };
 
   return (
-    <div className="w-80 border-l border-border/50 bg-card/50 flex-col h-full hidden md:flex backdrop-blur-xl shrink-0">
-      {/* Header */}
-      <div className="p-4 border-b border-border/50 bg-background/30 flex items-center gap-2">
-        <MessageCircle className="h-4 w-4 text-primary" />
-        <h2 className="font-bold text-sm tracking-tight flex-1">Live Chat</h2>
-        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-      </div>
+    <>
+      {/* Mobile backdrop */}
+      {isOpenOnMobile && (
+        <div
+          onClick={onCloseMobile}
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 md:hidden animate-in fade-in duration-200"
+        />
+      )}
+
+      <div
+        className={cn(
+          "border-l border-border/50 bg-card/95 flex flex-col h-full backdrop-blur-xl shrink-0 transition-all duration-300",
+          isOpenOnMobile
+            ? "fixed inset-y-0 right-0 w-[85vw] max-w-sm z-50 shadow-2xl flex"
+            : "w-80 hidden md:flex"
+        )}
+      >
+        {/* Header */}
+        <div className="p-4 border-b border-border/50 bg-background/30 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <MessageCircle className="h-4 w-4 text-primary" />
+            <h2 className="font-bold text-sm tracking-tight">Live Chat</h2>
+            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+          </div>
+          {isOpenOnMobile && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onCloseMobile}
+              className="h-8 w-8 rounded-full md:hidden"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
 
       {/* Messages */}
       <ScrollArea className="flex-1 p-3">
@@ -117,6 +154,7 @@ export default function ChatSidebar({ messages, players, myId, roomCode }: ChatS
       {/* Input */}
       <form onSubmit={handleSend} className="p-3 border-t border-border/50 bg-background/30 flex gap-2">
         <Input
+          ref={inputRef}
           value={inputText}
           onChange={e => setInputText(e.target.value)}
           placeholder="Type a message..."
@@ -131,5 +169,6 @@ export default function ChatSidebar({ messages, players, myId, roomCode }: ChatS
         </Button>
       </form>
     </div>
-  );
+  </>
+);
 }
