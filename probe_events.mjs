@@ -6,7 +6,7 @@ import { io } from "socket.io-client";
 
 const URL = "https://bluff-game-backend-2.onrender.com";
 
-let s1, s2, roomCode, players = [], p1Hand = [];
+let s1, s2, roomCode, _players = [], p1Hand = [];
 
 function makeSocket(name) {
   const s = io(URL, { transports: ["polling", "websocket"], autoConnect: false, reconnection: false });
@@ -48,13 +48,13 @@ async function setup() {
     s1.emit("create_room", { playerName: "Alice" });
   });
   await new Promise(r => {
-    s2.once("room_updated", d => { players = d.players || []; r(); });
+    s2.once("room_updated", d => { _players = d.players || []; r(); });
     s2.emit("join_room", { playerName: "Bob", roomCode });
   });
   await new Promise(r => {
     s1.once("game_started", d => {
       p1Hand = d.yourHand || [];
-      players = d.players || [];
+      _players = d.players || [];
       r();
     });
     s2.once("game_started", () => {});
