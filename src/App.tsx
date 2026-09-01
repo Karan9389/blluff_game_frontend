@@ -70,6 +70,8 @@ function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [yourHand, setYourHand] = useState<CardData[]>([]);
+  const [isMobileChatOpen, setIsMobileChatOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   // Track whether we showed "Connection lost" toast to avoid duplicate toasts
   const lostToastShown = useRef(false);
@@ -81,6 +83,24 @@ function App() {
   useEffect(() => { playerNameRef.current = playerName; }, [playerName]);
   useEffect(() => { roomCodeRef.current = roomCode; }, [roomCode]);
   useEffect(() => { currentViewRef.current = currentView; }, [currentView]);
+
+  const handleLeaveGame = () => {
+    clearSession();
+    setCurrentView("LOBBY");
+    setGameState(null);
+    setYourHand([]);
+    setPlayers([]);
+    setMessages([]);
+    setRoomCode("");
+    setIsMobileChatOpen(false);
+    setUnreadCount(0);
+    toast.info("Returned to lobby");
+  };
+
+  const handleOpenMobileChat = () => {
+    setIsMobileChatOpen(true);
+    setUnreadCount(0);
+  };
 
   // Persist session whenever key state changes
   useEffect(() => {
@@ -129,60 +149,76 @@ function App() {
     // ── Room events ──────────────────────────────────────────────────────
     socket.on("room_created", (...args: any[]) => {
       const data = args[0];
-      setRoomCode(data.roomCode || "");
-      setPlayers(data.players || []);
+      setRoomCode(data?.roomCode || "");
+      setPlayers(data?.players || []);
       setCurrentView("WAITING_ROOM");
-      toast.success(`Room ${data.roomCode} created!`);
+      toast.success(`Room ${data?.roomCode} created!`);
     });
 
     socket.on("room_updated", (...args: any[]) => {
       const data = args[0];
-      setPlayers(data.players || []);
-      if (data.messages?.length) setMessages(data.messages);
+      if (Array.isArray(data?.players)) setPlayers(data.players);
+      if (data?.messages?.length) setMessages(data.messages);
       setCurrentView(prev => prev === "LOBBY" ? "WAITING_ROOM" : prev);
     });
 
     // ── Game events ──────────────────────────────────────────────────────
     socket.on("game_started", (...args: any[]) => {
       const data = args[0];
-      setGameState(data.gameState || null);
-      setPlayers(data.players || []);
-      setYourHand(data.yourHand || []);
+      setGameState(data?.gameState || null);
+      if (Array.isArray(data?.players)) setPlayers(data.players);
+      if (Array.isArray(data?.yourHand)) setYourHand(data.yourHand);
       setCurrentView("ACTIVE_GAME");
       toast.success("🃏 Game started!");
     });
 
     socket.on("game_state_changed", (...args: any[]) => {
       const data = args[0];
-      if (data.gameState) setGameState(data.gameState);
-      if (data.players?.length) setPlayers(data.players);
-      if (data.yourHand?.length) setYourHand(data.yourHand);
+      if (data?.gameState) setGameState(data.gameState);
+      if (Array.isArray(data?.players)) setPlayers(data.players);
+      if (Array.isArray(data?.yourHand)) setYourHand(data.yourHand);
+
+      // Detect Game Over state
+      if (data?.gameState?.status === "GAME_OVER") {
+        const winner = data.players?.find((p: Player) => p.cardCount === 0)?.name || "A player";
+        toast.success(`🏆 Game Over! ${winner} cleared their hand and won!`, { id: "game-over-toast", duration: 8000 });
+        clearSession();
+      }
     });
 
     socket.on("new_message", (...args: any[]) => {
       const msg = args[0];
-      if (msg) setMessages(prev => [...prev, msg]);
+      if (msg) {
+        setMessages(prev => [...prev, msg]);
+        setUnreadCount(prev => prev + 1);
+      }
     });
 
     socket.on("error_message", (...args: any[]) => {
       const e = args[0];
       const msg = typeof e === "string" ? e : e?.message || e?.error || "Something went wrong";
       toast.error(msg);
-    });
 
-    // ── Game over ────────────────────────────────────────────────────────
-    socket.on("game_over", (...args: any[]) => {
-      const data = args[0];
-      const winner = data?.winner || data?.winnerName || "Someone";
-      toast.success(`🏆 Game Over! ${winner} wins!`, { duration: 6000 });
-      clearSession();
-      setTimeout(() => {
+      // If we failed to rejoin an in-progress or closed room, gracefully return to lobby
+      if (
+        typeof msg === "string" &&
+        (msg.toLowerCase().includes("already started") ||
+         msg.toLowerCase().includes("not found") ||
+         msg.toLowerCase().includes("full"))
+      ) {
+        clearSession();
         setCurrentView("LOBBY");
         setGameState(null);
         setYourHand([]);
-        setPlayers([]);
-        setMessages([]);
-      }, 4000);
+      }
+    });
+
+    // ── Game over fallback ───────────────────────────────────────────────
+    socket.on("game_over", (...args: any[]) => {
+      const data = args[0];
+      const winner = data?.winner || data?.winnerName || "Someone";
+      toast.success(`🏆 Game Over! ${winner} wins!`, { id: "game-over-toast", duration: 8000 });
+      clearSession();
     });
 
     return () => {
@@ -235,16 +271,34 @@ function App() {
       )}
 
       {currentView === "WAITING_ROOM" && (
-        <div className="flex flex-1 h-screen overflow-hidden">
-          <div className="flex-1 flex flex-col items-center justify-center p-8">
-            <WaitingRoom roomCode={roomCode} players={players} />
+        <div className="flex flex-1 h-screen overflow-hidden relative">
+          <div className="flex-1 flex flex-col items-center justify-center p-4 md:p-8 overflow-y-auto">
+            <WaitingRoom
+              roomCode={roomCode}
+              players={players}
+              playerName={playerName}
+              myId={myId}
+              onLeave={handleLeaveGame}
+              onOpenChat={handleOpenMobileChat}
+              unreadCount={unreadCount}
+            />
           </div>
-          <ChatSidebar messages={messages} players={players} myId={myId} roomCode={roomCode} />
+          <ChatSidebar
+            messages={messages}
+            players={players}
+            myId={myId}
+            roomCode={roomCode}
+            isOpenOnMobile={isMobileChatOpen}
+            onCloseMobile={() => {
+              setIsMobileChatOpen(false);
+              setUnreadCount(0);
+            }}
+          />
         </div>
       )}
 
       {currentView === "ACTIVE_GAME" && (
-        <div className="flex flex-1 h-screen overflow-hidden">
+        <div className="flex flex-1 h-screen overflow-hidden relative">
           <div className="flex-1 flex flex-col relative overflow-hidden">
             <GameBoard
               gameState={gameState}
@@ -252,9 +306,24 @@ function App() {
               yourHand={yourHand}
               roomCode={roomCode}
               myId={myId}
+              playerName={playerName}
+              messages={messages}
+              onLeave={handleLeaveGame}
+              onOpenChat={handleOpenMobileChat}
+              unreadCount={unreadCount}
             />
           </div>
-          <ChatSidebar messages={messages} players={players} myId={myId} roomCode={roomCode} />
+          <ChatSidebar
+            messages={messages}
+            players={players}
+            myId={myId}
+            roomCode={roomCode}
+            isOpenOnMobile={isMobileChatOpen}
+            onCloseMobile={() => {
+              setIsMobileChatOpen(false);
+              setUnreadCount(0);
+            }}
+          />
         </div>
       )}
     </div>
