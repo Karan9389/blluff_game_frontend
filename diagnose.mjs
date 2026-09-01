@@ -5,7 +5,7 @@
 import { io } from "socket.io-client";
 
 const URL = "https://bluff-game-backend-2.onrender.com";
-const TIMEOUT = 30000; // 30s total test window
+const _TIMEOUT = 30000; // 30s total test window
 
 console.log("━".repeat(60));
 console.log("🔍 Socket.io Connection Diagnostic");
