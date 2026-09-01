@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { socket } from "@/services/socket";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 
@@ -17,17 +17,34 @@ export default function LobbyView({ isConnected, playerName, setPlayerName, setR
   const [showJoin, setShowJoin] = useState(false);
   const [localRoomCode, setLocalRoomCode] = useState("");
 
+  // Check URL query parameters for invite link (e.g. ?room=ABCD or ?code=ABCD)
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const urlRoom = params.get("room") || params.get("code");
+      if (urlRoom && urlRoom.trim().length > 0) {
+        const code = urlRoom.trim().toUpperCase().slice(0, 4);
+        setLocalRoomCode(code);
+        setRoomCode(code);
+        setShowJoin(true);
+        toast.info(`Invite code ${code} detected! Enter your name to join.`);
+      }
+    } catch {
+      // noop
+    }
+  }, [setRoomCode]);
+
   const handleCreate = () => {
     if (!playerName.trim()) return toast.error("Enter a player name first!");
-    socket.emit("create_room", { playerName });
+    socket.emit("create_room", { playerName: playerName.trim() });
   };
 
   const handleJoin = () => {
     if (!playerName.trim()) return toast.error("Enter a player name first!");
     if (!localRoomCode.trim()) return toast.error("Enter a room code!");
-    const code = localRoomCode.toUpperCase();
+    const code = localRoomCode.trim().toUpperCase();
     setRoomCode(code);
-    socket.emit("join_room", { playerName, roomCode: code });
+    socket.emit("join_room", { playerName: playerName.trim(), roomCode: code });
   };
 
   return (
@@ -40,7 +57,7 @@ export default function LobbyView({ isConnected, playerName, setPlayerName, setR
             </div>
           </div>
           <CardTitle className="text-4xl font-extrabold tracking-tight">Bluff</CardTitle>
-          <CardDescription className="text-base font-medium flex items-center justify-center gap-2">
+          <div className="text-base font-medium flex items-center justify-center gap-2">
             <Badge variant="outline" className="px-3 py-1 gap-2 border-border/40">
               <span className="relative flex h-2.5 w-2.5">
                 {isConnected && (
@@ -50,7 +67,7 @@ export default function LobbyView({ isConnected, playerName, setPlayerName, setR
               </span>
               {isConnected ? "Connected to Server" : "Disconnected"}
             </Badge>
-          </CardDescription>
+          </div>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-2">
@@ -59,6 +76,15 @@ export default function LobbyView({ isConnected, playerName, setPlayerName, setR
               placeholder="Enter your alias..." 
               value={playerName}
               onChange={(e) => setPlayerName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  if (showJoin) {
+                    if (localRoomCode.trim()) handleJoin();
+                  } else {
+                    handleCreate();
+                  }
+                }
+              }}
               className="h-12 text-lg bg-background/50 border-border/50 focus-visible:ring-primary/50 transition-all"
             />
           </div>
@@ -81,6 +107,11 @@ export default function LobbyView({ isConnected, playerName, setPlayerName, setR
                     placeholder="e.g. ABCD" 
                     value={localRoomCode}
                     onChange={(e) => setLocalRoomCode(e.target.value.toUpperCase())}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        handleJoin();
+                      }
+                    }}
                     maxLength={4}
                     className="h-12 text-center text-2xl font-mono tracking-[0.25em] uppercase bg-background/50 border-border/50 focus-visible:ring-primary/50"
                   />
