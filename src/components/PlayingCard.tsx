@@ -6,12 +6,13 @@ interface PlayingCardProps {
   isSelected?: boolean;
   onClick?: () => void;
   faceDown?: boolean;
+  disabled?: boolean;
   className?: string;
 }
 
 const isRed = (suit: string) => suit === "♥" || suit === "♦";
 
-export default function PlayingCard({ card, isSelected, onClick, faceDown, className }: PlayingCardProps) {
+export default function PlayingCard({ card, isSelected, onClick, faceDown, disabled = false, className }: PlayingCardProps) {
   if (faceDown) {
     return (
       <div className={cn(
@@ -30,14 +31,15 @@ export default function PlayingCard({ card, isSelected, onClick, faceDown, class
 
   return (
     <div
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
       className={cn(
-        "relative w-[72px] h-[100px] rounded-xl bg-white shadow-lg border-2 cursor-pointer select-none",
-        "transition-all duration-150 flex flex-col justify-between p-1.5",
+        "relative w-[68px] h-[96px] sm:w-[72px] sm:h-[100px] rounded-xl bg-white shadow-lg border-2 select-none",
+        "transition-all duration-150 flex flex-col justify-between p-1.5 shrink-0",
+        disabled ? "cursor-not-allowed opacity-75" : "cursor-pointer",
         red ? "text-red-500" : "text-slate-900",
         isSelected
-          ? "border-primary -translate-y-5 shadow-xl shadow-primary/30 ring-2 ring-primary/40 ring-offset-1 ring-offset-transparent z-10"
-          : "border-slate-200 hover:-translate-y-2 hover:shadow-md hover:border-slate-300",
+          ? "border-primary -translate-y-4 shadow-xl shadow-primary/30 ring-2 ring-primary/40 ring-offset-1 ring-offset-transparent z-10"
+          : !disabled ? "border-slate-200 hover:-translate-y-2 hover:shadow-md hover:border-slate-300" : "border-slate-200",
         className
       )}
     >
