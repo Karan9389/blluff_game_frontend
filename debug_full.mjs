@@ -8,7 +8,7 @@ function makePlayer(name, onConnected) {
   const s = io(URL, { autoConnect: false });
   s.onAny((event, ...args) => {
     console.log(`\n━━━ [${name}] EVENT: "${event}" ━━━`);
-    try { console.log(JSON.stringify(args, null, 2)); } catch(e) { console.log(args); }
+    try { console.log(JSON.stringify(args, null, 2)); } catch { console.log(args); }
   });
   s.on("connect", () => {
     console.log(`\n✅ [${name}] connected. socket.id = ${s.id}`);
