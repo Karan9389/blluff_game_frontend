@@ -12,6 +12,7 @@ interface ChatSidebarProps {
   players: Player[];
   myId: string;
   roomCode: string;
+  playerName?: string;
   isOpenOnMobile?: boolean;
   onCloseMobile?: () => void;
 }
@@ -21,6 +22,7 @@ export default function ChatSidebar({
   players,
   myId,
   roomCode,
+  playerName,
   isOpenOnMobile = false,
   onCloseMobile,
 }: ChatSidebarProps) {
@@ -28,13 +30,13 @@ export default function ChatSidebar({
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Build id→name and name→id lookups
-  const nameMap: Record<string, string> = {};
-  const myName = players.find(p => p.id === myId)?.name ?? "";
-  players.forEach(p => { nameMap[p.id] = p.name; });
+  // Determine current user's name robustly
+  const myName = playerName ||
+    players.find(p => (myId && p.id === myId) || (socket.id && p.id === socket.id))?.name ||
+    "You";
 
   useEffect(() => {
-    scrollRef.current?.scrollIntoView({ behavior: "smooth" });
+    scrollRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [messages]);
 
   const handleSend = (e?: React.FormEvent) => {
@@ -58,8 +60,9 @@ export default function ChatSidebar({
   };
 
   const isMyMessage = (msg: ChatMessage): boolean => {
-    const senderName = msg.sender || msg.senderName || "";
-    return !!myName && senderName === myName;
+    if (msg.type === "system") return false;
+    const senderName = msg.sender || msg.senderName || msg.playerName || "";
+    return Boolean(myName && senderName && senderName.toLowerCase() === myName.toLowerCase());
   };
 
   return (
