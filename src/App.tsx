@@ -109,8 +109,36 @@ function App() {
     }
   }, [playerName, roomCode, currentView]);
 
+  // Tab title alert when it is the user's turn
+  useEffect(() => {
+    if (currentView === "ACTIVE_GAME" && gameState && gameState.status === "PLAYING") {
+      const currentPlayer = players[gameState.currentTurnIndex];
+      const me = players.find(p => (myId && p.id === myId) || (socket.id && p.id === socket.id))
+        ?? (playerName ? players.find(p => p.name === playerName) : null);
+      const isMyTurn = Boolean(
+        currentPlayer && (
+          currentPlayer.id === me?.id ||
+          (socket.id && currentPlayer.id === socket.id) ||
+          (playerName && currentPlayer.name === playerName)
+        )
+      );
+      if (isMyTurn) {
+        document.title = "🃏 (Your Turn!) Bluff";
+      } else {
+        document.title = "Bluff — Real-Time Multiplayer Card Game";
+      }
+    } else {
+      document.title = "Bluff — Real-Time Multiplayer Card Game";
+    }
+  }, [currentView, gameState, players, myId, playerName]);
+
   useEffect(() => {
     socket.connect();
+
+    // If socket is already connected when component mounts (e.g. React 19 StrictMode or HMR)
+    if (socket.connected) {
+      setMyId(socket.id || "");
+    }
 
     // ── connect ──────────────────────────────────────────────────────────
     socket.on("connect", () => {
@@ -121,8 +149,9 @@ function App() {
       const rc   = roomCodeRef.current;
       const name = playerNameRef.current;
 
-      if ((view === "WAITING_ROOM" || view === "ACTIVE_GAME") && rc && name) {
-        // Silent rejoin — toast is shown by ConnectionBar
+      // Only attempt join_room if waiting in WAITING_ROOM.
+      // Backend strictly rejects join_room if gameState.status !== 'LOBBY'
+      if (view === "WAITING_ROOM" && rc && name) {
         socket.emit("join_room", { playerName: name, roomCode: rc });
       }
     });
@@ -190,7 +219,12 @@ function App() {
       const msg = args[0];
       if (msg) {
         setMessages(prev => [...prev, msg]);
-        setUnreadCount(prev => prev + 1);
+        // Only increment unread count for messages from others
+        const sender = msg.sender || msg.senderName || msg.playerName || "";
+        const myCurrentName = playerNameRef.current;
+        if (sender && sender !== myCurrentName) {
+          setUnreadCount(prev => prev + 1);
+        }
       }
     });
 
@@ -199,9 +233,10 @@ function App() {
       const msg = typeof e === "string" ? e : e?.message || e?.error || "Something went wrong";
       toast.error(msg);
 
-      // If we failed to rejoin an in-progress or closed room, gracefully return to lobby
+      // If we failed to rejoin a closed or full room while in LOBBY or WAITING_ROOM, return to lobby
       if (
         typeof msg === "string" &&
+        currentViewRef.current !== "ACTIVE_GAME" &&
         (msg.toLowerCase().includes("already started") ||
          msg.toLowerCase().includes("not found") ||
          msg.toLowerCase().includes("full"))
@@ -243,7 +278,7 @@ function App() {
     <div className="min-h-screen bg-background text-foreground dark flex flex-col font-sans">
       <Toaster theme="dark" position="top-center" richColors closeButton />
 
-      {/* Live connection quality badge — always visible */}
+      {/* Live connection quality badge */}
       <ConnectionBar />
 
       {/* ── Reconnecting overlay — shown only mid-game ─────────────────── */}
@@ -288,6 +323,7 @@ function App() {
             players={players}
             myId={myId}
             roomCode={roomCode}
+            playerName={playerName}
             isOpenOnMobile={isMobileChatOpen}
             onCloseMobile={() => {
               setIsMobileChatOpen(false);
@@ -318,6 +354,7 @@ function App() {
             players={players}
             myId={myId}
             roomCode={roomCode}
+            playerName={playerName}
             isOpenOnMobile={isMobileChatOpen}
             onCloseMobile={() => {
               setIsMobileChatOpen(false);
