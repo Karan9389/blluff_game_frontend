@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { socket } from "@/services/socket";
 import type { GameState, Player, CardData, ChatMessage } from "@/App";
 import PlayingCard from "./PlayingCard";
@@ -18,8 +18,16 @@ import {
   RotateCcw,
   Copy,
   Check,
+  Lock,
 } from "lucide-react";
 import { toast } from "sonner";
+import {
+  copyToClipboard,
+  playTurnSound,
+  playCardSound,
+  playBluffAlert,
+  playVictorySound,
+} from "@/lib/utils";
 
 interface GameBoardProps {
   gameState: GameState | null;
@@ -34,7 +42,7 @@ interface GameBoardProps {
   unreadCount?: number;
 }
 
-const RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+const RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
 
 const rankOrder: Record<string, number> = {
   "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, "10": 10,
@@ -59,6 +67,14 @@ export default function GameBoard({
   const [sortBy, setSortBy] = useState<"rank" | "suit" | "dealt">("rank");
   const [copied, setCopied] = useState(false);
   const [showBluffBanner, setShowBluffBanner] = useState<string | null>(null);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+
+  const lastProcessedMsgRef = useRef<string | null>(null);
+  const prevIsMyTurnRef = useRef(false);
+
+  // Pile count and claim rank locking
+  const pileCount = gameState?.centerPile?.length ?? 0;
+  const isClaimRankLocked = pileCount > 0 && Boolean(gameState?.currentClaim?.rank);
 
   // Sync claimedRank with gameState claim if active
   useEffect(() => {
@@ -67,19 +83,39 @@ export default function GameBoard({
     }
   }, [gameState?.currentClaim?.rank]);
 
-  // Watch for latest bluff announcements from system messages
+  // Watch for latest bluff announcements from system messages (both bluff calls and wrong calls)
   useEffect(() => {
-    const latestSys = [...messages]
-      .reverse()
-      .find(m => m.type === "system" && (m.text?.includes("BLUFF") || m.message?.includes("BLUFF")));
+    const latestSys = [...messages].reverse().find(m => {
+      if (m.type !== "system") return false;
+      const text = (m.text || m.message || "").toUpperCase();
+      return text.includes("BLUFF") || text.includes("WRONG CALL");
+    });
 
-    const text = latestSys?.text || latestSys?.message;
-    if (text) {
-      setShowBluffBanner(text);
-      const timer = setTimeout(() => setShowBluffBanner(null), 6000);
-      return () => clearTimeout(timer);
+    if (latestSys) {
+      const sysId = latestSys.id || `${latestSys.text || latestSys.message}`;
+      if (lastProcessedMsgRef.current !== sysId) {
+        lastProcessedMsgRef.current = sysId;
+        const text = latestSys.text || latestSys.message || "";
+        setShowBluffBanner(text);
+        playBluffAlert();
+        const timer = setTimeout(() => setShowBluffBanner(null), 6500);
+        return () => clearTimeout(timer);
+      }
     }
   }, [messages]);
+
+  // Prune invalid selected indices if hand shrinks/updates
+  useEffect(() => {
+    setSelectedCardIndices(prev => {
+      const next = new Set<number>();
+      prev.forEach(idx => {
+        if (idx < yourHand.length && yourHand[idx]) {
+          next.add(idx);
+        }
+      });
+      return next;
+    });
+  }, [yourHand]);
 
   if (!gameState) {
     return (
@@ -101,7 +137,6 @@ export default function GameBoard({
   }
 
   // ── Correct Player Turn Indexing ─────────────────────────────────────────
-  // Server specifically uses room.players[currentTurnIndex]
   const currentPlayer = players[gameState.currentTurnIndex] ?? null;
 
   // Identify current player robustly by socket ID or name
@@ -118,8 +153,17 @@ export default function GameBoard({
     )
   );
 
-  const opponents = players.filter(p => p.id !== myEffectiveId && p.name !== playerName);
-  const pileCount = gameState.centerPile?.length ?? 0;
+  // Play audio chime and clear selections on turn transition
+  useEffect(() => {
+    if (!isMyTurn) {
+      setSelectedCardIndices(new Set());
+    } else if (!prevIsMyTurnRef.current) {
+      playTurnSound();
+    }
+    prevIsMyTurnRef.current = isMyTurn;
+  }, [isMyTurn]);
+
+  const opponents = players.filter(p => p !== me && p.id !== myEffectiveId && p.name !== playerName);
 
   // Last played player check
   const lastPlayedPlayer = players.find(p => p.id === gameState.lastPlayedPlayerId);
@@ -146,6 +190,12 @@ export default function GameBoard({
       (playerName && winner.name === playerName)
     )
   );
+
+  useEffect(() => {
+    if (isGameOver && isWinnerMe) {
+      playVictorySound();
+    }
+  }, [isGameOver, isWinnerMe]);
 
   // ── Indexed & Sorted Hand ────────────────────────────────────────────────
   const indexedHand = yourHand.map((card, originalIndex) => ({ card, originalIndex }));
@@ -188,11 +238,22 @@ export default function GameBoard({
     if (!isMyTurn) return toast.error("It's not your turn!");
     if (totalSelected === 0) return toast.error("Select at least one card!");
 
-    const cardsPlayed = Array.from(selectedCardIndices).map(i => yourHand[i]);
+    const cardsPlayed = Array.from(selectedCardIndices)
+      .map(i => yourHand[i])
+      .filter(Boolean);
+
+    if (cardsPlayed.length === 0) {
+      setSelectedCardIndices(new Set());
+      return toast.error("Selected cards are not available!");
+    }
+
+    const rankToClaim = isClaimRankLocked ? (gameState.currentClaim.rank || claimedRank) : claimedRank;
+
     // ✅ Backend expects: { roomCode, cardsPlayed, claimedRank }
-    socket.emit("play_cards", { roomCode, cardsPlayed, claimedRank });
+    socket.emit("play_cards", { roomCode, cardsPlayed, claimedRank: rankToClaim });
     setSelectedCardIndices(new Set());
-    toast.info(`Played ${totalSelected} card(s) as ${claimedRank}`);
+    playCardSound();
+    toast.info(`Played ${cardsPlayed.length} card(s) as ${rankToClaim}`);
   };
 
   const handleCallBluff = () => {
@@ -200,16 +261,24 @@ export default function GameBoard({
     if (isLastPlayerMe) {
       return toast.error("You can't call bluff on yourself!");
     }
+    if (!gameState.lastPlayedPlayerId) {
+      return toast.error("No recent play to challenge!");
+    }
     // ✅ Backend expects: { roomCode }
     socket.emit("call_bluff", { roomCode });
+    playBluffAlert();
     toast.info("Bluff called! Revealing cards…");
   };
 
-  const handleCopyCode = () => {
-    navigator.clipboard.writeText(roomCode);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-    toast.success("Room code copied!");
+  const handleCopyCode = async () => {
+    const ok = await copyToClipboard(roomCode);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+      toast.success("Room code copied!");
+    } else {
+      toast.info(`Room code: ${roomCode}`);
+    }
   };
 
   return (
