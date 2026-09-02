@@ -34,15 +34,32 @@ export default function LobbyView({ isConnected, playerName, setPlayerName, setR
     }
   }, [setRoomCode]);
 
+  const handleRoomCodeChange = (raw: string) => {
+    let clean = raw.trim();
+    if (clean.includes("room=") || clean.includes("code=")) {
+      const match = clean.match(/(?:room|code)=([A-Za-z0-9]{4})/i);
+      if (match) clean = match[1];
+    }
+    setLocalRoomCode(clean.toUpperCase().slice(0, 4));
+  };
+
   const handleCreate = () => {
     if (!playerName.trim()) return toast.error("Enter a player name first!");
+    if (!isConnected) {
+      toast.info("Connecting to backend server… please wait a moment.");
+      socket.connect();
+    }
     socket.emit("create_room", { playerName: playerName.trim() });
   };
 
   const handleJoin = () => {
     if (!playerName.trim()) return toast.error("Enter a player name first!");
     if (!localRoomCode.trim()) return toast.error("Enter a room code!");
-    const code = localRoomCode.trim().toUpperCase();
+    if (!isConnected) {
+      toast.info("Connecting to backend server… please wait a moment.");
+      socket.connect();
+    }
+    const code = localRoomCode.trim().toUpperCase().slice(0, 4);
     setRoomCode(code);
     socket.emit("join_room", { playerName: playerName.trim(), roomCode: code });
   };
@@ -106,7 +123,7 @@ export default function LobbyView({ isConnected, playerName, setPlayerName, setR
                   <Input 
                     placeholder="e.g. ABCD" 
                     value={localRoomCode}
-                    onChange={(e) => setLocalRoomCode(e.target.value.toUpperCase())}
+                    onChange={(e) => handleRoomCodeChange(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         handleJoin();
