@@ -8,6 +8,8 @@ import { Copy, Play, Users, Crown, LogOut, MessageCircle, Share2, Check } from "
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { copyToClipboard } from "@/lib/utils";
+
 interface WaitingRoomProps {
   roomCode: string;
   players: Player[];
@@ -37,12 +39,16 @@ export default function WaitingRoom({
     (host && playerName && host.name === playerName)
   );
 
-  const handleCopy = () => {
-    const link = `${window.location.origin}?room=${roomCode}`;
-    navigator.clipboard.writeText(link);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-    toast.success("Invite link copied to clipboard!");
+  const handleCopy = async () => {
+    const link = `${window.location.origin}${window.location.pathname}?room=${roomCode}`;
+    const ok = await copyToClipboard(link);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+      toast.success("Invite link copied to clipboard!");
+    } else {
+      toast.info(`Room code: ${roomCode}`);
+    }
   };
 
   const handleStart = () => {
