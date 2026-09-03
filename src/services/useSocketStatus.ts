@@ -31,7 +31,10 @@ export function useSocketStatus(): SocketStatus {
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
   const [latency, setLatency] = useState<number | null>(null);
-  const [transport, setTransport] = useState<TransportType>("unknown");
+  const [transport, setTransport] = useState<TransportType>(() => {
+    const t = (socket as any).io?.engine?.transport?.name as string | undefined;
+    return (t === "websocket" || t === "polling") ? t : "unknown";
+  });
 
   // Read current transport from the engine
   const readTransport = useCallback(() => {
@@ -39,19 +42,48 @@ export function useSocketStatus(): SocketStatus {
     setTransport((t === "websocket" || t === "polling") ? t : "unknown");
   }, []);
 
-  // Measure latency every 10s using a round-trip ack
+  // Track latency using engine.io ping/pong packets
   useEffect(() => {
     if (!isConnected) return;
-    const measure = () => {
-      const t0 = Date.now();
-      socket.emit("heartbeat", () => setLatency(Date.now() - t0));
+    const engine = (socket as any).io?.engine;
+    if (!engine) return;
+
+    let pingTimestamp = 0;
+    const handlePacketCreate = (packet: { type?: string }) => {
+      if (packet.type === "ping") {
+        pingTimestamp = Date.now();
+      }
     };
-    measure();
-    const id = setInterval(measure, 10_000);
-    return () => clearInterval(id);
+    const handlePacket = (packet: { type?: string }) => {
+      if (packet.type === "pong" && pingTimestamp > 0) {
+        setLatency(Date.now() - pingTimestamp);
+      }
+    };
+    const handlePong = () => {
+      if (pingTimestamp > 0) {
+        setLatency(Date.now() - pingTimestamp);
+      }
+    };
+
+    engine.on("packetCreate", handlePacketCreate);
+    engine.on("packet", handlePacket);
+    engine.on("pong", handlePong);
+
+    return () => {
+      engine.off?.("packetCreate", handlePacketCreate);
+      engine.off?.("packet", handlePacket);
+      engine.off?.("pong", handlePong);
+    };
   }, [isConnected]);
 
   useEffect(() => {
+    // If already connected on mount (e.g. StrictMode or HMR)
+    if (socket.connected) {
+      setIsConnected(true);
+      setIsReconnecting(false);
+      readTransport();
+    }
+
     const onConnect = () => {
       setIsConnected(true);
       setIsReconnecting(false);
@@ -80,12 +112,17 @@ export function useSocketStatus(): SocketStatus {
       readTransport();
     };
 
+    // Attach upgrade listener to engine if engine exists
+    const engine = (socket as any).io?.engine;
+    engine?.on("upgrade", readTransport);
+
     socket.on("connect", onConnect);
     socket.on("disconnect", onDisconnect);
     socket.io.on("reconnect_attempt", onReconnectAttempt);
     socket.io.on("reconnect", onReconnect);
 
     return () => {
+      engine?.off("upgrade", readTransport);
       socket.off("connect", onConnect);
       socket.off("disconnect", onDisconnect);
       socket.io.off("reconnect_attempt", onReconnectAttempt);
