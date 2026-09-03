@@ -117,27 +117,8 @@ export default function GameBoard({
     });
   }, [yourHand]);
 
-  if (!gameState) {
-    return (
-      <div className="flex-1 flex items-center justify-center bg-background">
-        <div className="flex flex-col items-center gap-4 text-muted-foreground p-6 max-w-sm text-center">
-          <Loader2 className="h-10 w-10 animate-spin text-primary" />
-          <div>
-            <h3 className="text-lg font-bold text-foreground mb-1">Connecting to Game...</h3>
-            <p className="text-xs text-muted-foreground">Waiting for game data from server.</p>
-          </div>
-          {onLeave && (
-            <Button variant="outline" size="sm" onClick={onLeave} className="mt-2 text-xs">
-              Back to Lobby
-            </Button>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // ── Correct Player Turn Indexing ─────────────────────────────────────────
-  const currentPlayer = players[gameState.currentTurnIndex] ?? null;
+  // ── Correct Player Turn Indexing & Derived State ──────────────────────────
+  const currentPlayer = gameState ? (players[gameState.currentTurnIndex] ?? null) : null;
 
   // Identify current player robustly by socket ID or name
   const me = players.find(p => (myId && p.id === myId) || (socket.id && p.id === socket.id))
@@ -166,9 +147,9 @@ export default function GameBoard({
   const opponents = players.filter(p => p !== me && p.id !== myEffectiveId && p.name !== playerName);
 
   // Last played player check
-  const lastPlayedPlayer = players.find(p => p.id === gameState.lastPlayedPlayerId);
+  const lastPlayedPlayer = players.find(p => p.id === gameState?.lastPlayedPlayerId);
   const isLastPlayerMe = Boolean(
-    gameState.lastPlayedPlayerId && (
+    gameState?.lastPlayedPlayerId && (
       gameState.lastPlayedPlayerId === myEffectiveId ||
       gameState.lastPlayedPlayerId === socket.id ||
       (lastPlayedPlayer && playerName && lastPlayedPlayer.name === playerName)
@@ -176,12 +157,12 @@ export default function GameBoard({
   );
 
   // Claim display
-  const claim = gameState.currentClaim;
-  const hasValidClaim = claim && (claim.count > 0 || claim.rank !== "");
-  const claimDisplay = hasValidClaim ? `${claim.count} × ${claim.rank || "?"}` : null;
+  const claim = gameState?.currentClaim;
+  const hasValidClaim = Boolean(claim && (claim.count > 0 || claim.rank !== ""));
+  const claimDisplay = hasValidClaim && claim ? `${claim.count} × ${claim.rank || "?"}` : null;
 
   // Check Game Over
-  const isGameOver = gameState.status === "GAME_OVER";
+  const isGameOver = gameState?.status === "GAME_OVER";
   const winner = players.find(p => p.cardCount === 0);
   const isWinnerMe = Boolean(
     winner && (
@@ -196,6 +177,25 @@ export default function GameBoard({
       playVictorySound();
     }
   }, [isGameOver, isWinnerMe]);
+
+  if (!gameState) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-4 text-muted-foreground p-6 max-w-sm text-center">
+          <Loader2 className="h-10 w-10 animate-spin text-primary" />
+          <div>
+            <h3 className="text-lg font-bold text-foreground mb-1">Connecting to Game...</h3>
+            <p className="text-xs text-muted-foreground">Waiting for game data from server.</p>
+          </div>
+          {onLeave && (
+            <Button variant="outline" size="sm" onClick={onLeave} className="mt-2 text-xs">
+              Back to Lobby
+            </Button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   // ── Indexed & Sorted Hand ────────────────────────────────────────────────
   const indexedHand = yourHand.map((card, originalIndex) => ({ card, originalIndex }));
@@ -304,7 +304,7 @@ export default function GameBoard({
             <Button
               variant="ghost"
               size="sm"
-              onClick={onLeave}
+              onClick={() => setShowLeaveConfirm(true)}
               className="h-7 px-2 text-xs text-white/50 hover:text-destructive hover:bg-destructive/10"
               title="Leave room"
             >
@@ -538,12 +538,20 @@ export default function GameBoard({
               )}
 
               <div className="flex items-center gap-1.5">
-                <label className="text-xs text-white/50 uppercase font-semibold tracking-wider">Claim:</label>
+                <label className="text-xs text-white/50 uppercase font-semibold tracking-wider flex items-center gap-1">
+                  {isClaimRankLocked && (
+                    <span title="Rank is locked for this pile">
+                      <Lock className="h-3 w-3 text-amber-400" />
+                    </span>
+                  )}
+                  Claim:
+                </label>
                 <select
                   value={claimedRank}
                   onChange={e => setClaimedRank(e.target.value)}
-                  disabled={!isMyTurn || isGameOver}
-                  className="h-8 w-16 bg-white/10 border border-white/25 rounded-md px-1.5 text-sm font-bold text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-30 cursor-pointer"
+                  disabled={!isMyTurn || isGameOver || isClaimRankLocked}
+                  className="h-8 w-16 bg-white/10 border border-white/25 rounded-md px-1.5 text-sm font-bold text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
+                  title={isClaimRankLocked ? "Claim rank is locked until center pile is cleared" : undefined}
                 >
                   {RANKS.map(r => <option key={r} value={r} className="bg-slate-900">{r}</option>)}
                 </select>
@@ -647,6 +655,32 @@ export default function GameBoard({
                 className="w-full h-12 text-base font-bold shadow-lg"
               >
                 Return to Lobby
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* ── LEAVE CONFIRMATION MODAL ── */}
+      {showLeaveConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in zoom-in-95 duration-200">
+          <div className="max-w-sm w-full bg-card border border-border/50 rounded-2xl p-6 text-center shadow-2xl space-y-4">
+            <h3 className="text-lg font-bold text-foreground">Leave Game?</h3>
+            <p className="text-sm text-muted-foreground">
+              Are you sure you want to abandon the match and return to the lobby?
+            </p>
+            <div className="flex gap-2 pt-2">
+              <Button variant="ghost" onClick={() => setShowLeaveConfirm(false)} className="flex-1">
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  setShowLeaveConfirm(false);
+                  onLeave?.();
+                }}
+                className="flex-1"
+              >
+                Leave
               </Button>
             </div>
           </div>
